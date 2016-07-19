@@ -1,160 +1,111 @@
-﻿/// <reference path="bbCodeParseTree.ts" />
-/// <reference path="bbTag.ts" />
-
-//Indicates if the first string ends with the second str
-function endsWith(str: string, endStr: string) {
-    if (str.length == 0) {
-        return false;
-    }
-
-    if (endStr.length > str.length) {
-        return false;
-    }
-
-    var inStrEnd = str.substr(str.length - endStr.length, endStr.length);
-    return endStr == inStrEnd;
-}
-
-//Indicates if the first string starts with the second string
-function startsWith(str: string, startStr: string) {
-    if (str.length == 0) {
-        return false;
-    }
-
-    if (startStr.length > str.length) {
-        return false;
-    }
-
-    var inStrStart = str.substr(0, startStr.length);
-    return startStr == inStrStart;
-}
+import {Tokenizer, TokenType} from './tokenizer';
+import {BBTag} from './bbTag';
+import {BBCodeParseTree, TreeType} from './bbCodeParseTree';
 
 var tagsToReplace = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;'
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;'
 };
 
-//Escapes the given html
-function escapeHTML(html) {
-    return html.replace(/[&<>]/g, function (tag) {
-        return tagsToReplace[tag] || tag;
-    });
-}
+const escapeHTML = (html) =>
+  html.replace(/[&<>]/g, (tag: string) => tagsToReplace[tag] || tag);
 
-//Represents a BB code parser
-class BBCodeParser {
-    //Creates a new parser with the given tags
-    constructor(private bbTags: Array<BBTag>) {
+export class BBCodeParser {
+  tagMap: { [key: string]: BBTag }
+  //Creates a new parser with the given tags
+  constructor(private bbTags: Array<BBTag>) {
+    this.tagMap = {}
+    bbTags.forEach(x => this.tagMap[x.tagName] = x);
+  }
 
+  public parseString(content: string, stripTags = false, insertLineBreak = true, escapingHtml = true) {
+    //Create the parse tree
+    var parseTree = BBCodeParseTree.buildTree(content, this.bbTags);
+
+    //If the tree is invalid, return the input as text
+    if (parseTree == null || !parseTree.isValid()) {
+      return content;
     }
 
-    //Parses the given string 
-    public parseString(content: string, stripTags = false, insertLineBreak = true, escapingHtml = true) {
-        //Create the parse tree
-        var parseTree = BBCodeParseTree.buildTree(content, this.bbTags);
+    //Convert it to HTML
+    return this.treeToHtml(parseTree.subTrees, insertLineBreak, escapingHtml, stripTags);
+  }
 
-        //If the tree is invalid, return the input as text
-        if (parseTree == null || !parseTree.isValid()) {
-            return content;
+  private treeToHtml(subTrees: Array<BBCodeParseTree>, insertLineBreak: boolean, escapingHtml: boolean, stripTags = false) {
+    var htmlString = "";
+    var suppressLineBreak = false;
+
+    subTrees.forEach(currentTree => {
+      if (currentTree.treeType == TreeType.Text) {
+        var textContent = currentTree.content;
+
+        if (escapingHtml) {
+          textContent = escapeHTML(textContent);
         }
 
-        //Convert it to HTML
-        return this.treeToHtml(parseTree.subTrees, insertLineBreak, escapingHtml, stripTags);
-    }
+        if (insertLineBreak && !suppressLineBreak) {
+          textContent = textContent.replace(/(\r\n|\n|\r)/gm, "<br>");
+          suppressLineBreak = false;
+        }
 
-    //Converts the given subtrees into html
-    private treeToHtml(subTrees: Array<BBCodeParseTree>, insertLineBreak: boolean, escapingHtml: boolean, stripTags = false) {
-        var htmlString = "";
-        var suppressLineBreak = false;
+        htmlString += textContent;
+      } else {
+        //Get the tag
+        var bbTag = this.tagMap[currentTree.content];
+        var content = this.treeToHtml(currentTree.subTrees, bbTag.insertLineBreaks, escapingHtml, stripTags);
 
-        subTrees.forEach(currentTree => {
-            if (currentTree.treeType == TreeType.Text) {
-                var textContent = currentTree.content;
+        //Check if to strip the tags
+        if (currentTree.isClosed && !stripTags) {
+          htmlString += bbTag.markupGenerator(bbTag, content, currentTree.attributes);
+        } else {
+          htmlString += content;
+        }
 
-                if(escapingHtml){
-                    textContent = escapeHTML(textContent);
-                }
+        suppressLineBreak = bbTag.suppressLineBreaks;
+      }
+    });
 
-                if (insertLineBreak && !suppressLineBreak) {
-                    textContent = textContent.replace(/(\r\n|\n|\r)/gm, "<br>");
-                    suppressLineBreak = false;
-                }
+    return htmlString;
+  }
 
-                htmlString += textContent;
-            } else {
-                //Get the tag
-                var bbTag = this.bbTags[currentTree.content];
-                var content = this.treeToHtml(currentTree.subTrees, bbTag.InsertLineBreaks, escapingHtml, stripTags);
+  public static defaultTags(): Array<BBTag> {
+    var bbTags = new Array<BBTag>();
 
-                //Check if to strip the tags
-                if (!stripTags) {
-                    htmlString += bbTag.markupGenerator(bbTag, content, currentTree.attributes);
-                } else {
-                    htmlString += content;
-                }
+    //Simple tags
+    bbTags.push(new BBTag("b", true, false, false));
+    bbTags.push(new BBTag("i", true, false, false));
+    bbTags.push(new BBTag("u", true, false, false));
 
-                suppressLineBreak = bbTag.suppressLineBreaks;
-            }
-        });
+    bbTags.push(new BBTag("text", true, false, true, (tag, content, attr) => content));
+    bbTags.push(new BBTag("img", true, false, false, (tag, content, attr) => `<img src="${content}" />`));
 
-        return htmlString;
-    }
-    
-    //Returns the default tags
-    public static defaultTags(): Array<BBTag> {
-        var bbTags = new Array<BBTag>();
+    bbTags.push(new BBTag("url", true, false, false, (tag, content, attr) => {
+      var link = content;
 
-        //Simple tags
-        bbTags["b"] = new BBTag("b", true, false, false);
-        bbTags["i"] = new BBTag("i", true, false, false);
-        bbTags["u"] = new BBTag("u", true, false, false);
+      if (attr["url"] != undefined) {
+        link = escapeHTML(attr["url"]);
+      }
 
-        bbTags["text"] = new BBTag("text", true, false, true, (tag, content, attr) => {
-            return content;
-        });
+      if (!link.startsWith("http://") && !link.startsWith("https://")) {
+        link = "http://" + link;
+      }
 
-        bbTags["img"] = new BBTag("img", true, false, false, (tag, content, attr) => {
-            return "<img src=\"" + content + "\" />";
-        });
+      return `<a href="${link}" target="_blank">${content}</a>`;
+    }));
 
-        bbTags["url"] = new BBTag("url", true, false, false, (tag, content, attr) => {
-            var link = content;
+    bbTags.push(new BBTag("code", true, false, true, (tag, content, attr) => {
+      var lang = attr["lang"];
 
-            if (attr["url"] != undefined) {
-                link = escapeHTML(attr["url"]);
-            }
+      return lang !== undefined
+        ? `<code class="${escapeHTML(lang)}">${content}</code>`
+        : `<code>${content}</code>`;
+    }));
 
-            if (!startsWith(link, "http://") && !startsWith(link, "https://")) {
-                link = "http://" + link;
-            }
+    return bbTags;
+  }
 
-            return "<a href=\"" + link + "\" target=\"_blank\">" + content + "</a>";
-        });
-
-        bbTags["code"] = new BBTag("code", true, false, true, (tag, content, attr) => {
-            var lang = attr["lang"];
-
-            if (lang !== undefined) {
-                return "<code class=\"" + escapeHTML(lang) + "\">" + content + "</code>";
-            } else {
-                return "<code>" + content + "</code>";
-            }
-        });
-
-        return bbTags;
-    }
-
-    public static escapeHTML(content: string) {
-        return escapeHTML(content);
-    }
-
-    public static startsWith(str:
-        string, startStr: string) {
-        return startsWith(str, startStr);
-    }
-
-    public static endsWith(str: string, endStr: string) {
-        return endsWith(str, endStr);
-    }
+  public static escapeHTML(content: string) {
+    return escapeHTML(content);
+  }
 }
